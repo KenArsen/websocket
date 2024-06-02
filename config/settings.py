@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,6 +21,7 @@ INSTALLED_APPS = [
     'rest_framework',
 
     'user.apps.UserConfig',
+    'chat.apps.ChatConfig',
     'realtime_integer.apps.RealtimeIntegerConfig',
 ]
 
@@ -35,6 +37,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'config.urls'
 AUTH_USER_MODEL = 'user.User'
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 
 TEMPLATES = [
     {
