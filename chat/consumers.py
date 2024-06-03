@@ -1,139 +1,86 @@
-# import json
-# from channels.generic.websocket import AsyncWebsocketConsumer
-#
+# from channels.generic.websocket import AsyncJsonWebsocketConsumer
+# from django.contrib.auth.models import AnonymousUser
+# from .models import Conversation, Message
+# from .serializers import MessageSerializer
 # from user.models import User
-# from .models import Chat, Message
-# from asgiref.sync import sync_to_async
+# from channels.db import database_sync_to_async
 #
 #
-# class ChatConsumer(AsyncWebsocketConsumer):
+# class ChatConsumer(AsyncJsonWebsocketConsumer):
+#     """
+#     This consumer is used to show user's online status,
+#     and send notifications.
+#     """
+#
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, kwargs)
+#         self.user = None
+#         self.conversation_name = None
+#         self.conversation = None
+#
 #     async def connect(self):
-#         self.chat_type = self.scope['url_route']['kwargs']['chat_type']
-#         self.chat_id = self.scope['url_route']['kwargs']['chat_id']
+#         print('Connected!')
+#         self.user = self.scope['user']
 #
-#         if self.chat_type == 'group':
-#             self.room_group_name = f'group_chat_{self.chat_id}'
-#         else:
-#             self.room_group_name = f'private_chat_{self.chat_id}'
-#
-#         await self.channel_layer.group_add(
-#             self.room_group_name,
-#             self.channel_name
-#         )
+#         # Проверяем, аутентифицирован ли пользователь
+#         if self.user is None or isinstance(self.user, AnonymousUser):
+#             await self.close()
+#             return
 #
 #         await self.accept()
-#
-#     async def disconnect(self, close_code):
-#         await self.channel_layer.group_discard(
-#             self.room_group_name,
-#             self.channel_name
+#         self.conversation_name = f"{self.scope['url_route']['kwargs']['conversation_name']}"
+#         self.conversation, created = await database_sync_to_async(Conversation.objects.get_or_create)(
+#             name=self.conversation_name)
+#         await self.channel_layer.group_add(
+#             self.conversation_name,
+#             self.channel_name,
 #         )
+#         messages = await database_sync_to_async(
+#             lambda: list(self.conversation.messages.all().order_by("-timestamp")[0:50]))()
+#         await self.send_json({
+#             "type": "last_50_messages",
+#             "messages": MessageSerializer(messages, many=True).data,
+#         })
 #
-#     async def receive(self, text_data=None, bytes_data=None):
-#         text_data_json = json.loads(text_data)
-#         message = text_data_json['message']
-#         user_id = text_data_json['user']
+#     async def disconnect(self, code):
+#         if self.conversation_name:
+#             await self.channel_layer.group_discard(
+#                 self.conversation_name,
+#                 self.channel_name,
+#             )
+#         print("Disconnected!")
+#         return await super().disconnect(code)
 #
-#         user = User.objects.get(pk=user_id)
-#         chat = await self.get_chat(user=user)
-#         if chat:
-#             Message.objects.create(chat=chat, sender=user, content=message)
+#     async def receive_json(self, content, **kwargs):
+#         # Проверяем, аутентифицирован ли пользователь
+#         if self.user is None or isinstance(self.user, AnonymousUser):
+#             await self.close()
+#             return
 #
-#         await self.channel_layer.group_send(
-#             self.room_group_name,
-#             {
-#                 'type': 'chat_message',
-#                 'message': message,
-#                 'sender': user.first_name
-#             }
-#         )
+#         message_type = content.get("type")
+#         if message_type == "chat_message":
+#             receiver = await self.get_receiver()
+#             message = await database_sync_to_async(Message.objects.create)(
+#                 from_user=self.user,
+#                 to_user=receiver,
+#                 content=content["message"],
+#                 conversation=self.conversation
+#             )
+#             await self.channel_layer.group_send(
+#                 self.conversation_name,
+#                 {
+#                     "type": "chat_message_echo",
+#                     "name": self.user.first_name,
+#                     "message": MessageSerializer(message).data,
+#                 },
+#             )
+#         return await super().receive_json(content, **kwargs)
 #
-#     async def chat_message(self, event):
-#         message = event['message']
-#         sender = event['sender']
+#     async def chat_message_echo(self, event):
+#         await self.send_json(event)
 #
-#         await self.send(text_data=json.dumps({
-#             'message': message,
-#             'sender': sender
-#         }))
-#
-#     async def get_chat(self, user):
-#         if self.chat_type == 'group':
-#             return await self.retrieve_chat(Chat.objects.filter(id=self.chat_id))
-#         else:
-#             return await self.retrieve_chat(Chat.objects.filter(id=self.chat_id, members=user))
-#
-#     async def retrieve_chat(self, queryset):
-#         return await sync_to_async(queryset.first)()
-
-
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from django.contrib.auth.models import AnonymousUser
-from .models import Conversation, Message
-
-
-class ChatConsumer(AsyncJsonWebsocketConsumer):
-    """
-    This consumer is used to show user's online status,
-    and send notifications.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.room_name = None
-        self.user = None
-
-    async def connect(self):
-        print('Connected!')
-        self.user = self.scope['user']
-        print(self.user.email)
-
-        # Проверяем, аутентифицирован ли пользователь
-        if self.user is None or isinstance(self.user, AnonymousUser):
-            await self.close()
-            return
-
-        self.room_name = "home"
-        await self.accept()
-        await self.channel_layer.group_add(
-            self.room_name,
-            self.channel_name,
-        )
-        await self.send_json(
-            {
-                "type": "welcome_message",
-                "message": "Hey there! You've successfully connected!",
-            }
-        )
-
-    async def disconnect(self, code):
-        if self.room_name:
-            await self.channel_layer.group_discard(
-                self.room_name,
-                self.channel_name,
-            )
-        print("Disconnected!")
-        return super().disconnect(code)
-
-    async def receive_json(self, content, **kwargs):
-        # Проверяем, аутентифицирован ли пользователь
-        if self.user is None or isinstance(self.user, AnonymousUser):
-            await self.close()
-            return
-
-        message_type = content.get("type")
-        if message_type == "chat_message":
-            await self.channel_layer.group_send(
-                self.room_name,
-                {
-                    "type": "chat_message_echo",
-                    "name": content.get("name"),
-                    "message": content.get("message"),
-                }
-            )
-        print(content)
-        return await super().receive_json(content, **kwargs)
-
-    async def chat_message_echo(self, event):
-        print(event)
-        await self.send_json(event)
+#     async def get_receiver(self):
+#         usernames = self.conversation_name.split("__")
+#         for username in usernames:
+#             if username != self.user.first_name:
+#                 return await database_sync_to_async(User.objects.get)(first_name=username)
